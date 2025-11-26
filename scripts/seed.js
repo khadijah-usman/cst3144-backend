@@ -1,6 +1,14 @@
 // scripts/seed.js
-require("dotenv").config();
+// This script wipes the "lessons" collection and re-inserts
+// fresh lesson data into MongoDB. Used for resetting the database
+// during development and coursework marking.
+
+require("dotenv").config();          // Loads MONGODB_URI from .env
 const { MongoClient } = require("mongodb");
+
+// ---------------------------------------------------------------
+// 1. Seed Data - list of 10 lessons identical to the frontend data
+// ---------------------------------------------------------------
 
 const lessons = [
   {
@@ -95,9 +103,16 @@ const lessons = [
   },
 ];
 
+// ---------------------------------------------------------------
+// 2. Seed Function
+// Connects to MongoDB, wipes the lessons collection,
+// and replaces it with fresh data.
+// ---------------------------------------------------------------
+
 async function seed() {
   const uri = process.env.MONGODB_URI;
 
+  // Safety check so the script does NOT run without a DB connection
   if (!uri) {
     console.error("❌ ERROR: MONGODB_URI is missing in .env");
     process.exit(1);
@@ -106,23 +121,33 @@ async function seed() {
   const client = new MongoClient(uri);
 
   try {
+    // Connect to MongoDB Atlas
     await client.connect();
     console.log("Connected to MongoDB!");
 
+    // Select our database
     const db = client.db("lesson_app");
+
+    // Select the "lessons" collection
     const lessonsCol = db.collection("lessons");
 
+    // Wipe old data (gives a clean reset each time)
     await lessonsCol.deleteMany({});
     console.log("Old lessons cleared.");
 
+    // Insert fresh lesson data
     await lessonsCol.insertMany(lessons);
     console.log("🎉 Seeding completed! Lessons inserted.");
 
   } catch (err) {
+    // If anything goes wrong, show the error
     console.error("❌ Seeding failed:", err);
+
   } finally {
+    // Close the DB connection whether success or failure
     client.close();
   }
 }
 
+// Run the seed function
 seed();
