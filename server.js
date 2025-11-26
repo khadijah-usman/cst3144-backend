@@ -172,11 +172,18 @@ app.put("/lessons/:id", async (req, res) => {
 async function handleCreateOrder(req, res) {
   const { name, phone, items, total } = req.body;
 
-  // Basic validation – protects the database from bad input
-  if (!name || !phone || !Array.isArray(items) || items.length === 0) {
+  // Basic validation – protects the database and ensures clean data
+if (!name || !phone || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: "Missing name, phone, or items." });
+  }
+  
+  // Phone validation: only digits + minimum length (e.g., 8)
+  const phoneDigitsOnly = /^[0-9]+$/.test(phone);
+  
+  if (!phoneDigitsOnly || phone.length < 8) {
     return res
       .status(400)
-      .json({ error: "Missing name, phone, or items in order." });
+      .json({ error: "Phone number must be at least 8 digits and contain only numbers." });
   }
 
   const orderDoc = {
