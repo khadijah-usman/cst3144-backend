@@ -3,6 +3,12 @@
 
 const express = require("express");
 const cors = require("cors");
+app.use(cors());
+app.use((req, res, next) => {
+  const now = new Date().toISOString();
+  console.log(`[${now}] ${req.method} ${req.url}`);
+  next();
+});
 const { MongoClient } = require("mongodb");
 const path = require("path");
 const fs = require("fs");
