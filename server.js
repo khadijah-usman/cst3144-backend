@@ -1,45 +1,47 @@
 // server.js
-// Express + MongoDB (native driver) backend for LessonHub
+// ===========================================================
+// CST3144 Lesson Booking App - Backend API
+// Technologies: Node.js, Express, MongoDB Atlas (native driver)
+// This server exposes REST endpoints used by the Vue frontend
+// to load lessons, search, place orders and update spaces.
+// ===========================================================
 
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-app.use(cors());
-app.use((req, res, next) => {
-  const now = new Date().toISOString();
-  console.log(`[${now}] ${req.method} ${req.url}`);
-  next();
-});
 const { MongoClient } = require("mongodb");
 const path = require("path");
 const fs = require("fs");
 
+// -----------------------------------------------------------
+// 1. EXPRESS APP + BASIC CONFIG
+// -----------------------------------------------------------
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ❗ Replace ONLY in development. For GitHub, keep this placeholder
-// and set the real URI as an environment variable on Render/AWS.
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://dijahnasir:dijahnasir2004@cluster02863.a0yng.mongodb.net/lesson_app?retryWrites=true&w=majority";
-
+// MongoDB connection string is stored in .env for security.
+// For example: MONGODB_URI=mongodb+srv://user:pass@cluster/.../lesson_app
+const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = "lesson_app";
 const LESSONS_COLLECTION = "lessons";
 const ORDERS_COLLECTION = "orders";
 
-// =============== GLOBAL DB HANDLES =================
+// Global handles to re-use the same connection across requests
 let db;
 let lessonsCollection;
 let ordersCollection;
 
-// =============== MIDDLEWARE ========================
+// -----------------------------------------------------------
+// 2. GLOBAL MIDDLEWARE
+// -----------------------------------------------------------
 
-// Allow front-end (GitHub Pages / localhost) to call this API
+// Allow frontend (localhost dev + GitHub Pages / Render) to call this API
 app.use(cors());
 
-// Parse JSON request bodies
+// Parse JSON request bodies into req.body
 app.use(express.json());
 
-// Logger middleware – prints every request to the console
+// Simple request logger – helpful for debugging & presentation
 app.use((req, res, next) => {
   const now = new Date().toISOString();
   console.log(`[${now}] ${req.method} ${req.url}`);
@@ -49,8 +51,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// Static file / image middleware:
-// Returns lesson images if they exist, otherwise a JSON error.
+// -----------------------------------------------------------
+// 3. STATIC IMAGE ROUTE
+// -----------------------------------------------------------
+// This route returns lesson images from /public/images.
+// If the file is missing, it returns a JSON 404 error.
 app.get("/images/:fileName", (req, res) => {
   const fileName = req.params.fileName;
   const filePath = path.join(__dirname, "public", "images", fileName);
@@ -63,11 +68,14 @@ app.get("/images/:fileName", (req, res) => {
   });
 });
 
-// =============== ROUTES (REST API) =================
+// -----------------------------------------------------------
+// 4. LESSON ROUTES (READ + SEARCH + UPDATE)
+// -----------------------------------------------------------
 
 /**
  * GET /lessons
- * Returns all lessons as JSON array
+ * Returns all lessons as a JSON array.
+ * Used by the frontend on initial page load.
  */
 app.get("/lessons", async (req, res) => {
   try {
@@ -81,14 +89,15 @@ app.get("/lessons", async (req, res) => {
 
 /**
  * GET /search?q=term
- * Challenge search feature (Back-end + Front-end)
- * Searches in subject, location, price, spaces
+ * Backend part of the “search” feature.
+ * Matches subject + location (case-insensitive) and
+ * optionally exact price/spaces if the term is numeric.
  */
 app.get("/search", async (req, res) => {
   const term = (req.query.q || "").trim();
 
+  // If no search term, just return all lessons
   if (!term) {
-    // If no term, just return all lessons
     const all = await lessonsCollection.find({}).toArray();
     return res.json(all);
   }
@@ -97,7 +106,6 @@ app.get("/search", async (req, res) => {
   const numTerm = Number(term);
   const isNumeric = !isNaN(numTerm);
 
-  // Build query using regex for text fields and direct compare for numbers
   const query = {
     $or: [
       { subject: { $regex: lowerTerm, $options: "i" } },
@@ -121,52 +129,9 @@ app.get("/search", async (req, res) => {
 });
 
 /**
- * POST /orders  (or /order)
- * Saves a new order into the "orders" collection.
- * Expected body:
- * {
- *   name: "Student Name",
- *   phone: "12345678",
- *   items: [{ id: 1, quantity: 2 }, ...],
- *   total: 250
- * }
- */
-async function handleCreateOrder(req, res) {
-  const { name, phone, items, total } = req.body;
-
-  if (!name || !phone || !Array.isArray(items) || items.length === 0) {
-    return res
-      .status(400)
-      .json({ error: "Missing name, phone, or items in order." });
-  }
-
-  const orderDoc = {
-    name,
-    phone,
-    items,
-    total: total || 0,
-    createdAt: new Date(),
-  };
-
-  try {
-    const result = await ordersCollection.insertOne(orderDoc);
-    res.status(201).json({
-      message: "Order saved",
-      orderId: result.insertedId,
-    });
-  } catch (err) {
-    console.error("Error in POST /orders:", err);
-    res.status(500).json({ error: "Failed to save order" });
-  }
-}
-
-app.post("/orders", handleCreateOrder);
-// alias to match coursework wording "order"
-app.post("/order", handleCreateOrder);
-
-/**
  * PUT /lessons/:id
- * Updates any attribute of a lesson (e.g. spaces) using our numeric "id" field.
+ * Updates a lesson using our numeric "id" field.
+ * The frontend uses this to update remaining spaces after checkout.
  * Example body: { spaces: 3 }
  */
 app.put("/lessons/:id", async (req, res) => {
@@ -196,10 +161,90 @@ app.put("/lessons/:id", async (req, res) => {
   }
 });
 
-// =============== DB CONNECT + SERVER START ==========
+// -----------------------------------------------------------
+// 5. ORDER ROUTES (CREATE + OPTIONAL LIST)
+// -----------------------------------------------------------
+
+/**
+ * Shared handler for creating orders.
+ * This supports both POST /orders and POST /order (alias).
+ */
+async function handleCreateOrder(req, res) {
+  const { name, phone, items, total } = req.body;
+
+  // Basic validation – protects the database from bad input
+  if (!name || !phone || !Array.isArray(items) || items.length === 0) {
+    return res
+      .status(400)
+      .json({ error: "Missing name, phone, or items in order." });
+  }
+
+  const orderDoc = {
+    name,
+    phone,
+    items,
+    total: total || 0,
+    createdAt: new Date(),
+  };
+
+  try {
+    const result = await ordersCollection.insertOne(orderDoc);
+    res.status(201).json({
+      message: "Order saved",
+      orderId: result.insertedId,
+    });
+  } catch (err) {
+    console.error("Error in POST /orders:", err);
+    res.status(500).json({ error: "Failed to save order" });
+  }
+}
+
+// Main coursework endpoint used by the frontend
+app.post("/orders", handleCreateOrder);
+
+// Alias to match variations in the spec (“/order” vs “/orders”)
+app.post("/order", handleCreateOrder);
+
+/**
+ * (Optional extra) GET /orders
+ * Helpful for testing and demonstrating stored orders in MongoDB.
+ */
+app.get("/orders", async (req, res) => {
+  try {
+    const orders = await ordersCollection.find({}).toArray();
+    res.json(orders);
+  } catch (err) {
+    console.error("Error in GET /orders:", err);
+    res.status(500).json({ error: "Failed to fetch orders" });
+  }
+});
+
+// -----------------------------------------------------------
+// 6. FALLBACK + ERROR HANDLERS
+// -----------------------------------------------------------
+
+// 404 handler for any unknown route
+app.use((req, res) => {
+  res.status(404).json({ error: "Route not found" });
+});
+
+// Generic error handler (in case any route calls next(err))
+app.use((err, req, res, next) => {
+  console.error("Unhandled server error:", err);
+  res.status(500).json({ error: "Internal server error" });
+});
+
+// -----------------------------------------------------------
+// 7. MONGODB CONNECTION + SERVER START
+// -----------------------------------------------------------
 
 async function startServer() {
   try {
+    if (!MONGODB_URI) {
+      console.error("Missing MONGODB_URI. Check your .env file.");
+      process.exit(1);
+    }
+
     const client = await MongoClient.connect(MONGODB_URI);
     db = client.db(DB_NAME);
     lessonsCollection = db.collection(LESSONS_COLLECTION);
@@ -212,7 +257,7 @@ async function startServer() {
     });
   } catch (err) {
     console.error("Failed to connect to MongoDB:", err);
-    process.exit(1);
+    process.exit(1); // Exit so deployment platforms know it failed
   }
 }
 
